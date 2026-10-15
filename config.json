@@ -1,0 +1,117 @@
+{
+  "project": "taxmesh",
+  "version": "0.1.0",
+  "currency": "USD",
+  "_rate_note": "All rates in this file are ILLUSTRATIVE synthetic values for a demo platform. Not tax advice; not real jurisdiction data.",
+  "paths": {
+    "data": "data",
+    "outputs": "outputs",
+    "landing": "landing"
+  },
+  "engine": {
+    "host": "127.0.0.1",
+    "port": 8077,
+    "base_url": "http://127.0.0.1:8077"
+  },
+  "seed": {
+    "rng_seed": 42,
+    "customers": 14,
+    "invoices": 120,
+    "history_days": 30
+  },
+  "nexus": ["US-CA", "US-NY", "US-TX", "US-WA"],
+  "zip_to_jurisdiction": {
+    "94105": "US-CA-SF",
+    "94103": "US-CA-SF",
+    "94107": "US-CA-SF",
+    "10001": "US-NY-NYC",
+    "10011": "US-NY-NYC",
+    "10018": "US-NY-NYC",
+    "75201": "US-TX-DAL",
+    "75202": "US-TX-DAL",
+    "98101": "US-WA-KING",
+    "98104": "US-WA-KING",
+    "80202": "US-CO-DEN",
+    "60601": "US-IL-CHI"
+  },
+  "jurisdictions": {
+    "US-CA-SF": {
+      "state_code": "US-CA",
+      "state_name": "California",
+      "county_name": "San Francisco",
+      "city_name": "San Francisco",
+      "rates": {"state": 0.06, "county": 0.0125, "city": 0.005, "district": 0.00375}
+    },
+    "US-NY-NYC": {
+      "state_code": "US-NY",
+      "state_name": "New York",
+      "county_name": "New York",
+      "city_name": "New York",
+      "rates": {"state": 0.04, "county": 0.045, "city": 0.0, "district": 0.00375}
+    },
+    "US-TX-DAL": {
+      "state_code": "US-TX",
+      "state_name": "Texas",
+      "county_name": "Dallas",
+      "city_name": "Dallas",
+      "rates": {"state": 0.0625, "county": 0.005, "city": 0.0125, "district": 0.0025}
+    },
+    "US-WA-KING": {
+      "state_code": "US-WA",
+      "state_name": "Washington",
+      "county_name": "King",
+      "city_name": "Seattle",
+      "rates": {"state": 0.065, "county": 0.015, "city": 0.0225, "district": 0.0}
+    },
+    "US-CO-DEN": {
+      "state_code": "US-CO",
+      "state_name": "Colorado",
+      "county_name": "Denver",
+      "city_name": "Denver",
+      "rates": {"state": 0.029, "county": 0.0136, "city": 0.0106, "district": 0.0}
+    },
+    "US-IL-CHI": {
+      "state_code": "US-IL",
+      "state_name": "Illinois",
+      "county_name": "Cook",
+      "city_name": "Chicago",
+      "rates": {"state": 0.0625, "county": 0.0175, "city": 0.0125, "district": 0.0}
+    }
+  },
+  "tax_codes": {
+    "SAAS-SUB": {
+      "description": "SaaS subscription",
+      "taxable_states": {"US-CA": true, "US-NY": true, "US-TX": true, "US-WA": true}
+    },
+    "ELEC-DL": {
+      "description": "Electronic download",
+      "taxable_states": {"US-CA": true, "US-NY": true, "US-TX": true, "US-WA": true}
+    },
+    "HARDWARE": {
+      "description": "Tangible personal property",
+      "taxable_states": {"US-CA": true, "US-NY": true, "US-TX": true, "US-WA": true}
+    },
+    "PROF-SVC": {
+      "description": "Professional services",
+      "taxable_states": {"US-CA": false, "US-NY": false, "US-TX": false, "US-WA": false}
+    },
+    "SHIP": {
+      "description": "Shipping and handling",
+      "taxable_states": {"US-CA": false, "US-NY": true, "US-TX": false, "US-WA": true}
+    }
+  },
+  "withholding": {
+    "rate": 0.019,
+    "applies_to_flagged_customers_only": true,
+    "_note": "Illustrative withholding line on flagged customer invoices; posted to GL 2105."
+  },
+  "gl_accounts": {
+    "AR": "1200",
+    "REVENUE": "4000",
+    "SALES_TAX_PAYABLE": "2100",
+    "WITHHOLDING_PAYABLE": "2105"
+  },
+  "controls": {
+    "monetary_tolerance_cents": 0
+  }
+}

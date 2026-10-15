@@ -103,6 +103,8 @@ class Paths:
     ap_tieouts: Path
     parallel_run: Path
     go_live: Path
+    epm: Path
+    monitoring: Path
 
     @classmethod
     def from_config(cls, cfg: dict, root: Path | str | None = None) -> "Paths":
@@ -130,6 +132,8 @@ class Paths:
             ap_tieouts=outputs / "ap_tieouts",
             parallel_run=outputs / "parallel_run",
             go_live=outputs / "go_live",
+            epm=base / p.get("landing", "landing") / "epm",
+            monitoring=outputs / "monitoring",
         )
 
     def ensure(self) -> None:
@@ -137,7 +141,8 @@ class Paths:
             self.data, self.outputs, self.landing, self.billing, self.erp,
             self.crm, self.engine, self.bus, self.procurement, self.ap,
             self.einvoicing, self.runs, self.tieouts, self.dlq, self.flow,
-            self.ap_tieouts, self.parallel_run, self.go_live,
+            self.ap_tieouts, self.parallel_run, self.go_live, self.epm,
+            self.monitoring,
         ):
             d.mkdir(parents=True, exist_ok=True)
 

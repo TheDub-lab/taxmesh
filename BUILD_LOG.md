@@ -183,3 +183,63 @@ Again, each was caught by running it, not by reading it.
   I scoped it, reviewed the diffs, ran both demos, and drove every failure above
   to a fix — and when a test failed for the wrong reason, the fix went into the
   code or the fixture, never into an assertion to make it pass.
+
+---
+
+## Session 3 — 2026-10-15 — Phase 3: EPM landing export and monitoring
+
+### What was built
+
+The hand-off out of the platform and a minimal operational view of it:
+
+- **EPM landing export** (`src/exports/epm.py`, `run_export_epm.py`) — builds four
+  flat CSV extracts from the tax mart (`dim_jurisdictions`, `fct_invoices`,
+  `fct_vendor_invoices`, and a combined `jurisdiction_tax` of AR sales tax plus AP
+  self-assessed use tax) into `landing/epm/`, plus a manifest that records the row
+  count and a content hash per file. Extracts are deliberately deterministic:
+  sorted rows, `\n` line endings, volatile columns (`loaded_at`) omitted, so an
+  unchanged mart re-exports byte-identically.
+- **Monitoring** (`src/monitoring/health.py`, `run_monitor.py`) — reads every run
+  manifest under `outputs/runs/` and every dead-letter queue under `outputs/dlq/`
+  back and rolls them into one health record (runs by status, degraded runs,
+  dead-letter totals); writes `outputs/monitoring/health.json` and exits non-zero
+  when `DEGRADED`.
+- **Demo wiring** — `run_demo.ps1` now runs the export and the monitor after the
+  flows/gates, with an `-AllowFail` step mode so the informational monitor reports
+  `DEGRADED` without failing the script; `Paths` gained `epm` and `monitoring`.
+- **Tests** — 9 new tests (67 total): export coverage, row counts vs the mart,
+  byte-for-byte determinism, the combined jurisdiction extract, and the monitor's
+  HEALTHY/DEGRADED logic including the DLQ and `COMPLETED_WITH_EXCEPTIONS` cases.
+
+### Verified behaviour (not just claimed)
+
+- Clean `-Phase all`: export writes 190 rows (6 jurisdictions, 120 invoices, 60
+  vendor invoices, 4 combined jurisdiction rows); monitor reports **HEALTHY**
+  (2 runs, both `COMPLETED`, 0 dead letters); script exits 0.
+- Break `-Phase all -Breaks`: export drops to 119 invoices (one event dropped) and
+  57 vendor invoices (three blocked); monitor reports **DEGRADED** (one
+  `COMPLETED_WITH_EXCEPTIONS` run, 1 dead letter) and the script still exits 0
+  because that is the expected outcome.
+- Re-exporting an unchanged mart produces byte-identical files (asserted in the
+  suite).
+
+### Bugs found and fixed during this session
+
+1. **A "successful" run-with-exceptions failed the demo.** `run_revenue_flow.py`
+   exits non-zero when the DLQ is non-empty — correct for a CI gate, but in the
+   break demo that is the *expected* outcome, so the one-command script threw at
+   the revenue-flow step before it could show the controls failing. This was a
+   latent Phase 1 bug that only appeared once a break run was driven through the
+   whole script end to end. Fixed by marking the flow step `-AllowFail` in break
+   mode: the DLQ is allowed to be non-empty precisely when a break was injected.
+
+### Honest notes
+
+- The `-AllowFail` mode is a small, deliberate compromise: a *monitoring* step is
+  informational, so it prints its verdict and does not gate the demo, whereas the
+  controls and go-live gate are real gates and do. The exit codes remain correct
+  for anyone wiring them into a scheduler.
+- Rates and amounts are still synthetic; the export/monitoring mechanics are the
+  point, not the numbers.
+- Sessions append; earlier sections are not rewritten. Bug counts quoted in the
+  README refer to the total across the three sessions.

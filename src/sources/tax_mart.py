@@ -238,6 +238,14 @@ def tax_line_totals_by_jurisdiction(paths: Paths) -> dict[str, float]:
         return {r["jurisdiction_id"]: float(r["tax"]) for r in rows}
 
 
+def jurisdiction_rows(paths: Paths) -> list[dict]:
+    with _Session(paths) as con:
+        rows = con.execute(
+            "SELECT * FROM dim_jurisdictions ORDER BY jurisdiction_id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def load_vendor_invoice(
     paths: Paths,
     voucher: dict,

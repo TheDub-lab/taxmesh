@@ -6,7 +6,8 @@ procurement and AP systems feed a vendor-style **tax engine**; the engine's
 results post to a general ledger, load into a tax mart, and are then **tied out
 across sources** by automated controls that name any exception they find. The AP
 side adds three-way match, self-assessed use tax, e-invoicing, a legacy
-parallel run, and a go-live gate.
+parallel run, and a go-live gate. Finally the mart is exported to a downstream
+**EPM** landing zone and the run evidence is rolled up into a **health record**.
 
 Everything is deterministic (`rng_seed: 42` for revenue, `1042` for AP): the same
 seeds produce the same invoices, the same taxes, and the same control results,
@@ -16,11 +17,11 @@ every time.
 Payline Billing ──invoice.finalized──► Atlas Tax Engine ──tax──┬─► Fincore ERP (GL)
       (outbox)         retry/DLQ        (deterministic)        │
 Fincore Procure ──PO/receipts──────────────────────────────────┼─► Tax mart (SQLite)
-Payline AP ──vendor_invoice.received──► (match → tax) ─────────┘
-      (outbox + e-invoicing inbox)                             │
-Relate CRM (certs) ──────────────────────────────────────────► ▼
-          Controls: counts · money · hashes · per-jurisdiction   + AP match/coverage
-          Parallel run (new vs legacy AP) ──► Go-live gate
+Payline AP ──vendor_invoice.received──► (match → tax) ─────────┘        │
+      (outbox + e-invoicing inbox)                                     ▼
+Relate CRM (certs) ──────────────────────────────────────────►  Landing export (Planwell EPM)
+          Controls: counts · money · hashes · per-jurisdiction  + AP match/coverage
+          Parallel run (new vs legacy AP) ──► Go-live gate ──► Monitoring (manifests + DLQ)
 ```
 
 > All rates, jurisdictions, nexus and account numbers are **synthetic and
@@ -40,9 +41,10 @@ way — a `Decimal`/`float` mismatch, SQLite handles left open on Windows, a
 primary-key collision, an event-id collision between injected breaks, cloud
 storage (OneDrive) refusing to delete directories that had become reparse points,
 an AP double-entry that balanced only by accident (the input-tax allocation summed
-engine rows for vendor-charged tax), and a parallel run that could never flag its
+engine rows for vendor-charged tax), a parallel run that could never flag its
 signature variance (it compared AP credit, where self-assessed use tax never
-appears).
+appears), and a break-mode demo step that exited non-zero on a *successful*
+run-with-exceptions.
 
 The honest summary: the assistant wrote the code; I set the scope, reviewed the
 diffs, ran the demos, and drove each failure to a fix — and where a test failed
@@ -63,8 +65,10 @@ for the wrong reason, the fix went into the code, not the assertion.
 | **Go-live readiness** | `src/controls/go_live.py` — gates the migration on control results, parallel-run variances, e-invoice coverage and the DLQ; exits non-zero when not ready |
 | Exception handling | retry/backoff, dead letter queue (`outputs/dlq/`), idempotency store, named exceptions; match exceptions are business outcomes, transport errors are delivery failures |
 | Data pipelines | billing/vendor invoices → engine → GL → tax mart (SQLite), plus a file landing zone for EPM |
-| Auditability & evidence | run manifests with counts and content hashes (`outputs/runs/`) and written control reports (`outputs/tieouts/`, `outputs/ap_tieouts/`, `outputs/parallel_run/`, `outputs/go_live/`) |
-| Testing & reproducibility | 58 tests over the engine API, the bus, both flows, matching, e-invoicing, the controls, the parallel run and the go-live gate; seeded, deterministic data |
+| **Downstream integration (EPM)** | `src/exports/epm.py` — deterministic CSV extracts from the mart with a manifest recording row counts and content hashes |
+| **Monitoring & observability** | `src/monitoring/health.py` — roll up run manifests and dead-letter queues into a HEALTHY/DEGRADED record; `run_monitor.py` exits non-zero when degraded |
+| Auditability & evidence | run manifests with counts and content hashes (`outputs/runs/`) and written reports (`outputs/tieouts/`, `outputs/ap_tieouts/`, `outputs/parallel_run/`, `outputs/go_live/`, `landing/epm/`, `outputs/monitoring/`) |
+| Testing & reproducibility | 67 tests over the engine API, the bus, both flows, matching, e-invoicing, the controls, the parallel run, the go-live gate, the EPM export and monitoring; seeded, deterministic data |
 | Pros/cons and trade-offs | see "The controls" and "Known breaks" below — the platform is designed to *fail loudly and correctly*, not just to pass |
 
 ---
@@ -107,10 +111,18 @@ And through procure-to-pay (the engine must be running):
 .venv\Scripts\python.exe run_go_live.py            # go-live gate; exit 0 only when READY
 ```
 
-`run_controls.py`, `run_ap_controls.py`, `run_parallel_run.py` and `run_go_live.py`
-exit non-zero when their verdict is not a pass, so they wire straight into a
-scheduler or CI gate. `run_seed_ap.py --reset` clears the shared engine/GL state
-so an AP-only run does not reconcile against a previous run's leftovers.
+And the hand-off and health steps (run after any of the flows):
+
+```powershell
+.venv\Scripts\python.exe run_export_epm.py         # tax mart -> deterministic CSV extracts for EPM
+.venv\Scripts\python.exe run_monitor.py            # manifests + DLQ roll-up; exit 1 if DEGRADED
+```
+
+`run_controls.py`, `run_ap_controls.py`, `run_parallel_run.py`, `run_go_live.py`
+and `run_monitor.py` exit non-zero when their verdict is not a pass, so they wire
+straight into a scheduler or CI gate. `run_seed_ap.py --reset` clears the shared
+engine/GL state so an AP-only run does not reconcile against a previous run's
+leftovers.
 
 ### Where the data goes
 
@@ -163,6 +175,22 @@ voucher but leaves every count and money tie-out internally consistent (the
 exception is named, not hidden), whereas a *posting or transport error* breaks a
 tie-out and/or produces a dead letter.
 
+## Downstream hand-off and health
+
+**EPM export** (`run_export_epm.py`, `src/exports/epm.py`) writes four flat
+extracts from the mart — `dim_jurisdictions`, `fct_invoices`,
+`fct_vendor_invoices`, and a combined `jurisdiction_tax` (AR sales tax + AP
+self-assessed use tax) — into `landing/epm/`, alongside a manifest recording each
+file's row count and content hash. Extracts are deterministic: sorted rows, fixed
+line endings, volatile columns excluded, so an unchanged mart re-exports
+byte-identically (there is a test for exactly that).
+
+**Monitoring** (`run_monitor.py`, `src/monitoring/health.py`) reads every run
+manifest and dead-letter queue back and produces one health record: run counts by
+status, any degraded (non-`COMPLETED`) runs, and dead-letter totals. The CLI
+exits non-zero when the platform is `DEGRADED`, which happens whenever a run did
+not finish cleanly or anything is sitting in a DLQ.
+
 ## Known breaks (fail-safe demo)
 
 Revenue — `run_seed.py --inject drop_event,dlq_event` injects two faults:
@@ -204,8 +232,10 @@ src/
   integrations/        bus.py, engine_client.py, billing_connector.py, flow.py,
                        ap_connector.py, ap_flow.py
   controls/            tieouts.py, ap_controls.py, parallel_run.py, go_live.py
+  exports/epm.py       tax mart -> EPM landing extracts
+  monitoring/health.py run-manifest + DLQ health roll-up
 tests/                 pytest suite
-run_*.py               CLI entry points (revenue and AP)
+run_*.py               CLI entry points (revenue, AP, export, monitoring)
 run_demo.ps1           one-command demo (-Phase ar|ap|all, -Breaks)
 ```
 
@@ -215,7 +245,8 @@ run_demo.ps1           one-command demo (-Phase ar|ap|all, -Breaks)
 .venv\Scripts\python.exe -m pytest
 ```
 
-58 tests cover the determination rules, the HTTP API, retry/DLQ/idempotency, both
+67 tests cover the determination rules, the HTTP API, retry/DLQ/idempotency, both
 end-to-end flows, three-way match, the input/use-tax split, e-invoicing round
-trip, the revenue and AP tie-outs, the parallel run and the go-live gate. No
-network access is required.
+trip, the revenue and AP tie-outs, the parallel run, the go-live gate, the EPM
+export (including determinism) and the monitoring roll-up. No network access is
+required.

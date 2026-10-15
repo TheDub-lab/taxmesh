@@ -44,7 +44,8 @@ function Invoke-Step {
     param(
         [string]$Label,
         [string[]]$ScriptArgs,
-        [switch]$ExpectFail
+        [switch]$ExpectFail,
+        [switch]$AllowFail
     )
     Write-Host "`n== $Label ==" -ForegroundColor Cyan
     & $python @ScriptArgs
@@ -52,6 +53,9 @@ function Invoke-Step {
     if ($ExpectFail) {
         if ($code -eq 0) { throw "$Label was expected to fail but exited 0" }
         Write-Host "($Label failed as expected, exit $code)" -ForegroundColor DarkYellow
+    }
+    elseif ($AllowFail) {
+        if ($code -ne 0) { Write-Host "($Label reported a non-pass state, exit $code)" -ForegroundColor DarkYellow }
     }
     elseif ($code -ne 0) {
         throw "$Label failed (exit $code)"
@@ -89,7 +93,7 @@ try {
     Write-Host "engine healthy on http://127.0.0.1:$Port"
 
     if ($runAr) {
-        Invoke-Step -Label 'Revenue flow (billing -> engine -> GL -> mart)' -ScriptArgs @('run_revenue_flow.py')
+        Invoke-Step -Label 'Revenue flow (billing -> engine -> GL -> mart)' -ScriptArgs @('run_revenue_flow.py') -AllowFail:$Breaks
         Invoke-Step -Label 'Revenue controls / tie-outs' -ScriptArgs @('run_controls.py') -ExpectFail:$Breaks
     }
     if ($runAp) {
@@ -100,6 +104,9 @@ try {
         if ($Breaks) { $goLiveArgs += @('--inject', 'legacy_drift') }
         Invoke-Step -Label 'Go-live readiness gate' -ScriptArgs $goLiveArgs -ExpectFail:$Breaks
     }
+
+    Invoke-Step -Label 'EPM landing export (tax mart -> Planwell CSV)' -ScriptArgs @('run_export_epm.py')
+    Invoke-Step -Label 'Monitoring roll-up (manifests + DLQ)' -ScriptArgs @('run_monitor.py') -AllowFail
 }
 finally {
     if ($engine -and -not $engine.HasExited) { Stop-Process -Id $engine.Id -Force }

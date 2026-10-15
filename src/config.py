@@ -93,10 +93,16 @@ class Paths:
     crm: Path
     engine: Path
     bus: Path
+    procurement: Path
+    ap: Path
+    einvoicing: Path
     runs: Path
     tieouts: Path
     dlq: Path
     flow: Path
+    ap_tieouts: Path
+    parallel_run: Path
+    go_live: Path
 
     @classmethod
     def from_config(cls, cfg: dict, root: Path | str | None = None) -> "Paths":
@@ -114,17 +120,24 @@ class Paths:
             crm=data / "crm",
             engine=data / "engine",
             bus=data / "bus",
+            procurement=data / "procurement",
+            ap=data / "ap",
+            einvoicing=data / "einvoicing",
             runs=outputs / "runs",
             tieouts=outputs / "tieouts",
             dlq=outputs / "dlq",
             flow=outputs / "flow",
+            ap_tieouts=outputs / "ap_tieouts",
+            parallel_run=outputs / "parallel_run",
+            go_live=outputs / "go_live",
         )
 
     def ensure(self) -> None:
         for d in (
             self.data, self.outputs, self.landing, self.billing, self.erp,
-            self.crm, self.engine, self.bus, self.runs, self.tieouts,
-            self.dlq, self.flow,
+            self.crm, self.engine, self.bus, self.procurement, self.ap,
+            self.einvoicing, self.runs, self.tieouts, self.dlq, self.flow,
+            self.ap_tieouts, self.parallel_run, self.go_live,
         ):
             d.mkdir(parents=True, exist_ok=True)
 

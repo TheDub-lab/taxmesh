@@ -19,6 +19,14 @@
     "invoices": 120,
     "history_days": 30
   },
+  "seed_ap": {
+    "rng_seed": 1042,
+    "suppliers": 8,
+    "purchase_orders": 40,
+    "vendor_invoices": 60,
+    "history_days": 30,
+    "xml_share": 0.25
+  },
   "nexus": ["US-CA", "US-NY", "US-TX", "US-WA"],
   "zip_to_jurisdiction": {
     "94105": "US-CA-SF",
@@ -98,6 +106,14 @@
     "SHIP": {
       "description": "Shipping and handling",
       "taxable_states": {"US-CA": false, "US-NY": true, "US-TX": false, "US-WA": true}
+    },
+    "FREIGHT-IN": {
+      "description": "Inbound freight",
+      "taxable_states": {"US-CA": false, "US-NY": true, "US-TX": false, "US-WA": true}
+    },
+    "MEALS-ENT": {
+      "description": "Meals and entertainment (non-recoverable input tax)",
+      "taxable_states": {"US-CA": true, "US-NY": true, "US-TX": true, "US-WA": true}
     }
   },
   "withholding": {
@@ -109,7 +125,33 @@
     "AR": "1200",
     "REVENUE": "4000",
     "SALES_TAX_PAYABLE": "2100",
-    "WITHHOLDING_PAYABLE": "2105"
+    "WITHHOLDING_PAYABLE": "2105",
+    "AP": "2110",
+    "GRNI": "2150",
+    "INPUT_TAX_RECOVERABLE": "1300",
+    "USE_TAX_PAYABLE": "2200",
+    "EXPENSE": "5000",
+    "NONRECOVERABLE_TAX": "6100"
+  },
+  "input_tax": {
+    "recoverable": true,
+    "nonrecoverable_tax_codes": ["MEALS-ENT"],
+    "_note": "Illustrative input-tax recoverability. Non-recoverable tax is expensed to GL 6100."
+  },
+  "ap": {
+    "three_way_match": {
+      "price_tolerance_cents": 0,
+      "quantity_tolerance": 0
+    },
+    "duplicate_window_days": 30,
+    "payment_terms_days": 30,
+    "_note": "Illustrative AP matching tolerances. Exceptions are blocked from posting, not paid."
+  },
+  "go_live": {
+    "max_blocked_invoices": 0,
+    "max_unexpected_parallel_variances": 0,
+    "require_einvoice_coverage": true,
+    "require_no_dlq": true
   },
   "controls": {
     "monetary_tolerance_cents": 0

@@ -93,3 +93,78 @@ def post_invoice_entry(cfg: dict, paths: Paths, invoice: dict, tax_result: dict)
     journal.append(entry)
     save_journal(paths, journal)
     return entry
+
+
+def post_vendor_entry(cfg: dict, paths: Paths, voucher: dict, tax_result: dict) -> dict:
+    """Post the AP double-entry for a matched, taxed vendor invoice.
+
+    DR 5000 Expense                subtotal
+    DR 1300 Input tax recoverable  recoverable tax, per jurisdiction
+    DR 6100 Non-recoverable tax    non-recoverable tax
+    CR 2110 AP                     subtotal + vendor-charged tax
+    CR 2200 Use tax payable        self-assessed use tax, per jurisdiction
+    """
+    entry_id = f"JEAP-{voucher['voucherId']}"
+    journal = load_journal(paths)
+    for entry in journal:
+        if entry["entryId"] == entry_id:
+            return entry
+
+    accounts = cfg["gl_accounts"]
+    subtotal = round(float(voucher["subtotal"]), 2)
+    vendor_total = round(float(tax_result["vendorTaxTotal"]), 2)
+    self_total = round(float(tax_result["selfAssessedTaxTotal"]), 2)
+    recov_total = round(float(tax_result["recoverableTaxTotal"]), 2)
+    nonrecov_total = round(float(tax_result["nonrecoverableTaxTotal"]), 2)
+
+    recov_by_juris: dict[str, float] = {}
+    self_by_juris: dict[str, float] = {}
+    voucher_juris = tax_result.get("jurisdictionId")
+    for line in tax_result["lines"]:
+        rows = line["jurisdictions"]
+        # self-assessed portion is jurisdiction-split by the engine's own rows
+        if line["selfAssessedTax"] > 0:
+            for row in rows:
+                jid = row["jurisdictionId"]
+                self_by_juris[jid] = round(self_by_juris.get(jid, 0.0) + row["tax"], 2)
+                if line["recoverable"] > 0:
+                    recov_by_juris[jid] = round(recov_by_juris.get(jid, 0.0) + row["tax"], 2)
+        # vendor-charged tax has no engine split: allocate to the voucher jurisdiction
+        if line["vendorTax"] > 0 and line["recoverable"] > 0 and voucher_juris:
+            recov_by_juris[voucher_juris] = round(
+                recov_by_juris.get(voucher_juris, 0.0) + line["vendorTax"], 2)
+
+    rows = [
+        {"account": accounts["EXPENSE"], "debit": subtotal, "credit": 0.0,
+         "jurisdictionId": None},
+    ]
+    for jid, amount in sorted(recov_by_juris.items()):
+        if amount:
+            rows.append({"account": accounts["INPUT_TAX_RECOVERABLE"], "debit": amount,
+                         "credit": 0.0, "jurisdictionId": jid})
+    if nonrecov_total:
+        rows.append({"account": accounts["NONRECOVERABLE_TAX"], "debit": nonrecov_total,
+                     "credit": 0.0, "jurisdictionId": None})
+    rows.append({"account": accounts["AP"], "debit": 0.0,
+                 "credit": round(subtotal + vendor_total, 2), "jurisdictionId": None})
+    for jid, amount in sorted(self_by_juris.items()):
+        if amount:
+            rows.append({"account": accounts["USE_TAX_PAYABLE"], "debit": 0.0,
+                         "credit": amount, "jurisdictionId": jid})
+
+    debit = round(sum(r["debit"] for r in rows), 2)
+    credit = round(sum(r["credit"] for r in rows), 2)
+    if debit != credit:
+        raise ValueError(f"unbalanced AP entry {entry_id}: DR {debit} != CR {credit}")
+
+    entry = {
+        "entryId": entry_id,
+        "voucherId": voucher["voucherId"],
+        "supplierCode": voucher["supplierCode"],
+        "date": voucher["invoiceDate"],
+        "postedAt": now_iso(),
+        "lines": rows,
+    }
+    journal.append(entry)
+    save_journal(paths, journal)
+    return entry

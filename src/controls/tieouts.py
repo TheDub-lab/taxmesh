@@ -58,14 +58,15 @@ def run_tieouts(
         engine = EngineClient(base_url=cfg["engine"]["base_url"])
 
     try:
-        engine_txns = engine.transactions()
+        engine_txns = [t for t in engine.transactions()
+                       if t.get("docType", "SALE") == "SALE"]
     finally:
         if own_engine:
             engine.close()
 
     invoices = [i for i in billing.load_invoices(paths) if i["status"] == "finalized"]
     outbox = billing.load_outbox(paths)
-    journal = erp.load_journal(paths)
+    journal = [e for e in erp.load_journal(paths) if e.get("invoiceId")]
     mart_rows = tax_mart.invoice_rows(paths)
     accounts = cfg["gl_accounts"]
 

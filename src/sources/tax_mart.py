@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS dim_jurisdictions (
     city_name TEXT,
     total_rate REAL
 );
+CREATE TABLE IF NOT EXISTS dim_suppliers (
+    supplier_code TEXT PRIMARY KEY,
+    name TEXT,
+    tax_id TEXT,
+    remit_to_zip TEXT,
+    country_code TEXT
+);
 CREATE TABLE IF NOT EXISTS fct_invoices (
     invoice_id TEXT PRIMARY KEY,
     customer_code TEXT,
@@ -49,6 +56,44 @@ CREATE TABLE IF NOT EXISTS fct_gl_postings (
     entry_id TEXT,
     row_seq INTEGER,
     invoice_id TEXT,
+    account TEXT,
+    debit REAL,
+    credit REAL,
+    jurisdiction_id TEXT,
+    PRIMARY KEY (entry_id, row_seq)
+);
+CREATE TABLE IF NOT EXISTS fct_vendor_invoices (
+    voucher_id TEXT PRIMARY KEY,
+    supplier_code TEXT,
+    supplier_invoice_number TEXT,
+    po_id TEXT,
+    invoice_date TEXT,
+    status TEXT,
+    delivery_zip TEXT,
+    match_status TEXT,
+    subtotal REAL,
+    vendor_tax_total REAL,
+    self_assessed_tax_total REAL,
+    recoverable_tax_total REAL,
+    nonrecoverable_tax_total REAL,
+    engine_txn_id TEXT,
+    source TEXT,
+    loaded_at TEXT
+);
+CREATE TABLE IF NOT EXISTS fct_vendor_tax_lines (
+    voucher_id TEXT,
+    line_id TEXT,
+    jurisdiction_id TEXT,
+    jurisdiction_type TEXT,
+    rate REAL,
+    tax_amount REAL,
+    tax_source TEXT,
+    PRIMARY KEY (voucher_id, line_id, jurisdiction_id, jurisdiction_type, tax_source)
+);
+CREATE TABLE IF NOT EXISTS fct_ap_postings (
+    entry_id TEXT,
+    row_seq INTEGER,
+    voucher_id TEXT,
     account TEXT,
     debit REAL,
     credit REAL,
@@ -95,6 +140,28 @@ def init_schema(paths: Paths) -> None:
 def reset(paths: Paths) -> None:
     robust_unlink(db_path(paths))
     init_schema(paths)
+
+
+def reset_ap(paths: Paths) -> None:
+    """Clear only the AP-side facts and supplier dimension, leaving AR data intact."""
+    init_schema(paths)
+    with _Session(paths) as con:
+        con.execute("DELETE FROM fct_vendor_invoices")
+        con.execute("DELETE FROM fct_vendor_tax_lines")
+        con.execute("DELETE FROM fct_ap_postings")
+        con.execute("DELETE FROM dim_suppliers")
+
+
+def upsert_suppliers(paths: Paths, suppliers: list[dict]) -> None:
+    with _Session(paths) as con:
+        con.executemany(
+            "INSERT OR REPLACE INTO dim_suppliers VALUES (?,?,?,?,?)",
+            [
+                (s["supplierCode"], s["name"], s.get("taxId", ""),
+                 s.get("remitToZip", ""), s.get("countryCode", "US"))
+                for s in suppliers
+            ],
+        )
 
 
 def upsert_customers(paths: Paths, customers: list[dict]) -> None:
@@ -167,5 +234,74 @@ def tax_line_totals_by_jurisdiction(paths: Paths) -> dict[str, float]:
         rows = con.execute(
             "SELECT jurisdiction_id, ROUND(SUM(tax_amount), 2) AS tax "
             "FROM fct_tax_lines GROUP BY jurisdiction_id"
+        ).fetchall()
+        return {r["jurisdiction_id"]: float(r["tax"]) for r in rows}
+
+
+def load_vendor_invoice(
+    paths: Paths,
+    voucher: dict,
+    tax_result: dict,
+    gl_entry: dict,
+    match_status: str,
+) -> None:
+    """Idempotent (delete + insert) load of one vendor invoice across AP facts."""
+    vid = voucher["voucherId"]
+    with _Session(paths) as con:
+        con.execute("DELETE FROM fct_vendor_invoices WHERE voucher_id = ?", (vid,))
+        con.execute("DELETE FROM fct_vendor_tax_lines WHERE voucher_id = ?", (vid,))
+        con.execute("DELETE FROM fct_ap_postings WHERE voucher_id = ?", (vid,))
+
+        con.execute(
+            "INSERT INTO fct_vendor_invoices VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                vid, voucher["supplierCode"], voucher["supplierInvoiceNumber"],
+                voucher.get("poId"), voucher["invoiceDate"], voucher["status"],
+                voucher["deliveryZip"], match_status,
+                float(voucher["subtotal"]),
+                float(tax_result["vendorTaxTotal"]),
+                float(tax_result["selfAssessedTaxTotal"]),
+                float(tax_result["recoverableTaxTotal"]),
+                float(tax_result["nonrecoverableTaxTotal"]),
+                tax_result.get("engineTxnId"), voucher.get("source", "json"), now_iso(),
+            ),
+        )
+
+        tax_rows = []
+        for line in tax_result["lines"]:
+            for row in line.get("jurisdictions", []):
+                tax_rows.append(
+                    (vid, line["lineId"], row["jurisdictionId"],
+                     row["jurisdictionType"], row["rate"], row["tax"], "SELF")
+                )
+            if float(line.get("vendorTax", 0.0)):
+                tax_rows.append(
+                    (vid, line["lineId"], tax_result["jurisdictionId"],
+                     "Vendor Charged", 0.0, float(line["vendorTax"]), "VENDOR")
+                )
+        con.executemany("INSERT INTO fct_vendor_tax_lines VALUES (?,?,?,?,?,?,?)", tax_rows)
+
+        gl_rows = [
+            (gl_entry["entryId"], i, gl_entry["voucherId"], r["account"],
+             r["debit"], r["credit"], r["jurisdictionId"])
+            for i, r in enumerate(gl_entry["lines"])
+        ]
+        con.executemany("INSERT INTO fct_ap_postings VALUES (?,?,?,?,?,?,?)", gl_rows)
+
+
+def vendor_invoice_rows(paths: Paths) -> list[dict]:
+    with _Session(paths) as con:
+        rows = con.execute(
+            "SELECT * FROM fct_vendor_invoices ORDER BY voucher_id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def self_assessed_tax_by_jurisdiction(paths: Paths) -> dict[str, float]:
+    with _Session(paths) as con:
+        rows = con.execute(
+            "SELECT jurisdiction_id, ROUND(SUM(tax_amount), 2) AS tax "
+            "FROM fct_vendor_tax_lines WHERE tax_source = 'SELF' "
+            "GROUP BY jurisdiction_id"
         ).fetchall()
         return {r["jurisdiction_id"]: float(r["tax"]) for r in rows}

@@ -27,3 +27,19 @@ def workspace(tmp_path):
 def engine(workspace):
     app = create_app(cfg=workspace.cfg, root=workspace.root)
     return EngineClient(client=TestClient(app))
+
+
+@pytest.fixture
+def ap_workspace(tmp_path):
+    shutil.copy(REPO_ROOT / "config.json", tmp_path / "config.json")
+    cfg = load_config(tmp_path)
+    cfg["seed_ap"].update({"vendor_invoices": 12, "purchase_orders": 10})
+    paths = get_paths(cfg, tmp_path)
+    paths.ensure()
+    return SimpleNamespace(root=tmp_path, cfg=cfg, paths=paths)
+
+
+@pytest.fixture
+def ap_engine(ap_workspace):
+    app = create_app(cfg=ap_workspace.cfg, root=ap_workspace.root)
+    return EngineClient(client=TestClient(app))
